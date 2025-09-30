@@ -1,0 +1,1 @@
+/usr/bin/c++ -L/usr/lib/x86_64-linux-gnu -lldns "CMakeFiles/aiori.dir/src/main/dns-idk.cpp.o" -o aiori  -lldns -lboost_system -lpthread 
