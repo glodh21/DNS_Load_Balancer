@@ -7,21 +7,25 @@
 #include <unistd.h>
 #include "../config/config_loader.h"
 #include "../config/health_checker.h"
+#include "../config/load_balancer.h"
 using namespace std;
 
 using boost::asio::ip::udp;
 
 const int DNS_PORT = 5353; // 53 if root
 const char* ZONE_NAME = "example.com."; // Our zone
-const char* RESPONSE_IP = "1.2.3.4";
 
 class DnsServer {
 public:
-    DnsServer(boost::asio::io_context& io_context)
-        : socket_(io_context, udp::endpoint(udp::v4(), DNS_PORT)) {
+    DnsServer(boost::asio::io_context& io_context, LoadBalancer* load_balancer)
+        : socket_(io_context, udp::endpoint(udp::v4(), DNS_PORT)),
+          load_balancer_(load_balancer) {
         zone_dname_ = ldns_dname_new_frm_str(ZONE_NAME);
         if (!zone_dname_) {
             throw std::runtime_error("Failed to create zone dname");
+        }
+        if (!load_balancer_) {
+            throw std::runtime_error("LoadBalancer is null");
         }
         start_receive();
         
@@ -34,7 +38,12 @@ public:
 
 
 private:
+    udp::socket socket_;
+    udp::endpoint remote_endpoint_;
+    std::array<uint8_t, 512> recv_buffer_;
     ldns_rdf* zone_dname_;
+    LoadBalancer* load_balancer_;
+    
     void start_receive() {
         socket_.async_receive_from(
             boost::asio::buffer(recv_buffer_), remote_endpoint_,
@@ -60,24 +69,44 @@ private:
     ldns_rr_list* qlist = ldns_pkt_question(query_pkt);
     ldns_pkt_push_rr_list(resp_pkt, LDNS_SECTION_QUESTION, ldns_rr_list_clone(qlist));
 
-    // For each question, respond with hardcoded A if in our zone
+    // For each question, get server IP from load balancer
     for (size_t i = 0; i < ldns_rr_list_rr_count(qlist); ++i) {
         ldns_rr* q = ldns_rr_list_rr(qlist, i);
         ldns_rdf* qname = ldns_rr_owner(q);
         ldns_rr_type qtype = ldns_rr_get_type(q);
 
         if (ldns_dname_compare(qname, zone_dname_) == 0 && qtype == LDNS_RR_TYPE_A) {
-            ldns_rr* a_rr = ldns_rr_new();
-            ldns_rr_set_owner(a_rr, ldns_rdf_clone(qname));
-            ldns_rr_set_type(a_rr, LDNS_RR_TYPE_A);
-            ldns_rr_set_class(a_rr, LDNS_RR_CLASS_IN);
-            ldns_rr_set_ttl(a_rr, 300); // TTL 5min
+            // Get domain name as string for load balancer
+            char* domain_str = ldns_rdf2str(qname);
+            std::string domain = domain_str ? std::string(domain_str) : "";
+            free(domain_str);
+            
+            // Get next server from load balancer using round-robin
+            std::string backend_ip = load_balancer_->getServerForQuery(domain);
+            
+            if (backend_ip.empty()) {
+                // No backend available, return SERVFAIL
+                std::cerr << "❌ No backend server available for query" << std::endl;
+                ldns_pkt_set_rcode(resp_pkt, LDNS_RCODE_SERVFAIL);
+            } else {
+                // Create A record with backend server IP
+                ldns_rr* a_rr = ldns_rr_new();
+                ldns_rr_set_owner(a_rr, ldns_rdf_clone(qname));
+                ldns_rr_set_type(a_rr, LDNS_RR_TYPE_A);
+                ldns_rr_set_class(a_rr, LDNS_RR_CLASS_IN);
+                ldns_rr_set_ttl(a_rr, 300); // TTL 5min
 
-            ldns_rdf* ip_rdf;
-            ldns_str2rdf_a(&ip_rdf, RESPONSE_IP);
-            ldns_rr_push_rdf(a_rr, ip_rdf);
-
-            ldns_pkt_push_rr(resp_pkt, LDNS_SECTION_ANSWER, a_rr);
+                ldns_rdf* ip_rdf;
+                if (ldns_str2rdf_a(&ip_rdf, backend_ip.c_str()) == LDNS_STATUS_OK) {
+                    ldns_rr_push_rdf(a_rr, ip_rdf);
+                    ldns_pkt_push_rr(resp_pkt, LDNS_SECTION_ANSWER, a_rr);
+                    std::cout << "✅ Responding with backend IP: " << backend_ip << std::endl;
+                } else {
+                    std::cerr << "❌ Failed to convert IP: " << backend_ip << std::endl;
+                    ldns_rr_free(a_rr);
+                    ldns_pkt_set_rcode(resp_pkt, LDNS_RCODE_SERVFAIL);
+                }
+            }
         } else {
             // Not in zone → NXDOMAIN
             ldns_pkt_set_rcode(resp_pkt, LDNS_RCODE_NXDOMAIN);
@@ -97,18 +126,19 @@ private:
     ldns_pkt_free(query_pkt);
     ldns_pkt_free(resp_pkt);
 }
-    udp::socket socket_;
-    udp::endpoint remote_endpoint_;
-    std::array<uint8_t, 512> recv_buffer_;
 };
 
-// Global health checker for signal handling
+// Global objects for signal handling
 HealthChecker* g_health_checker = nullptr;
+LoadBalancer* g_load_balancer = nullptr;
 
 void signalHandler(int signal) {
     std::cout << "\nReceived signal " << signal << ", shutting down gracefully..." << std::endl;
     if (g_health_checker) {
         g_health_checker->stop();
+    }
+    if (g_load_balancer) {
+        g_load_balancer->printStats();
     }
     exit(0);
 }
@@ -165,9 +195,13 @@ int main() {
         g_health_checker = &health_checker;
         health_checker.start();
         
-        // Start DNS server
+        // Initialize load balancer with round-robin algorithm
+        LoadBalancer load_balancer(pools, &health_checker, LoadBalancingAlgorithm::ROUND_ROBIN);
+        g_load_balancer = &load_balancer;
+        
+        // Start DNS server with load balancer
         boost::asio::io_context io_context;
-        DnsServer server(io_context);
+        DnsServer server(io_context, &load_balancer);
         std::cout << " DNS server started on port " << DNS_PORT << std::endl;
         std::cout << " Health checker monitoring " << pools.size() << " server pools" << std::endl;
         

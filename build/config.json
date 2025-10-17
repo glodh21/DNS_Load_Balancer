@@ -7,7 +7,7 @@
         {"ip": "192.168.1.11", "port": 53, "weight": 3},
         {"ip": "192.168.1.12", "port": 53, "weight": 2}
       ],
-      "health_endpoint": "192.168.1.10:8080/health",
+  "health_endpoint": "http://127.0.0.1:8080/health",
       "geo_region": "north-america",
       "check_interval_sec": 10
     },
@@ -17,7 +17,7 @@
         {"ip": "192.168.2.10", "port": 53, "weight": 2},
         {"ip": "192.168.2.11", "port": 53, "weight": 2}
       ],
-      "health_endpoint": "192.168.2.10:8080/health",
+  "health_endpoint": "http://127.0.0.1:8080/health",
       "geo_region": "europe",
       "check_interval_sec": 10
     },
@@ -26,7 +26,7 @@
       "servers": [
         {"ip": "192.168.3.10", "port": 53, "weight": 1}
       ],
-      "health_endpoint": "192.168.3.10:8080/health", 
+  "health_endpoint": "http://127.0.0.1:8080/health", 
       "geo_region": "asia",
       "check_interval_sec": 10
     },
@@ -36,7 +36,7 @@
         {"ip": "192.168.99.99", "port": 53, "weight": 1},
         {"ip": "192.168.99.98", "port": 53, "weight": 1}
       ],
-      "health_endpoint": "192.168.99.99:8080/health",
+  "health_endpoint": "http://127.0.0.1:8080/health",
       "geo_region": "test",
       "check_interval_sec": 10
     }

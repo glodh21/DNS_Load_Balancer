@@ -1,0 +1,29 @@
+#pragma once
+
+#include <boost/optional.hpp>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <vector>
+
+using std::cerr;
+using std::clog;
+using std::cout;
+using std::endl;
+using std::ifstream;
+using std::make_unique;
+using std::map;
+using std::max;
+using std::min;
+using std::ofstream;
+using std::ostream;
+using std::ostringstream;
+using std::pair;
+using std::runtime_error;
+using std::set;
+using std::shared_ptr;
+using std::string;
+using std::unique_ptr;
+using std::vector;
